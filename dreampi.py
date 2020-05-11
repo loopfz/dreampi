@@ -181,13 +181,13 @@ def find_next_unused_ip(start):
     raise Exception("Unable to find a free IP on the network")
 
 
-def autoconfigure_ppp(device, speed):
+def autoconfigure_ppp(devices):
     """
        Every network is different, this function runs on boot and tries
        to autoconfigure PPP as best it can by detecting the subnet and gateway
        we're running on.
 
-       Returns the IP allocated to the Dreamcast
+       This completes the devices list with the target dreamcast IP for each device
     """
 
     gateway_ip = subprocess.check_output("route -n | grep 'UG[ \t]' | awk '{print $2}'", shell=True)
@@ -197,6 +197,7 @@ def autoconfigure_ppp(device, speed):
 {device}
 {device_speed}
 {this_ip}:{dc_ip}
+linkname {device_name}
 noauth
     """.strip()
 
@@ -209,36 +210,67 @@ noccp
     """.strip()
 
     this_ip = find_next_unused_ip(".".join(subnet) + ".100")
-    dreamcast_ip = find_next_unused_ip(this_ip)
+    last_ip = this_ip
+    count = 0
 
-    logger.info("Dreamcast IP: {}".format(dreamcast_ip))
+    # find a target IP for all detected devices
+    for device in devices:
+        dreamcast_ip = find_next_unused_ip(last_ip)
+        last_ip = dreamcast_ip
+        device['dreamcast_ip'] = dreamcast_ip
+        count += 1
+        # name our device: will be passed when starting pppd
+        # can also be used to decorate e.g. logs or dcnow
+        device['name'] = 'dreamcast'
+        if len(devices) > 1:
+            device['name'] = 'dreamcast'+str(count)
 
-    peers_content = PEERS_TEMPLATE.format(device=device, device_speed=speed, this_ip=this_ip, dc_ip=dreamcast_ip)
+        logger.info("Dreamcast IP: {}".format(dreamcast_ip))
 
-    with open("/etc/ppp/peers/dreamcast", "w") as f:
-        f.write(peers_content)
+        peers_content = PEERS_TEMPLATE.format(device=device['device'], device_speed=device['speed'], this_ip=this_ip, dc_ip=dreamcast_ip, device_name=device['name'])
+
+        with open("/etc/ppp/peers/"+device['name'], "w") as f:
+            f.write(peers_content)
 
     options_content = OPTIONS_TEMPLATE.format(this_ip)
 
     with open("/etc/ppp/options", "w") as f:
         f.write(options_content)
 
-    return dreamcast_ip
-
 
 ENABLE_SPEED_DETECTION = False  # Set this to true if you want to use wvdialconf for device detection
+FORCE_TWO_MODEMS = False # experimental feature: force dreampi to consider two modem devices without running wvdialconf
 
 
-def detect_device_and_speed():
+# detect_devices_and_speed will run wvdialconf to detect any number of modem devices and their associated
+# speed.
+# wvdialconf can be prolematic with recent Pi models, as such it is disabled by default, using a single
+# default modem device (ttyACM0).
+# wvdialconf can be re-enabled by setting ENABLE_SPEED_DETECTION to True,
+# or if you still want to bypass the autodetection but try to use two modems, you can set
+# FORCE_DOUBLE_MODEM to True. (the second modem device will be ttyACM1 by default).
+def detect_devices_and_speed():
     MAX_SPEED = 57600
 
+    # TODO: what's causing this? can the root cause be fixed somehow?
+    #
+    # https://www.raspberrypi.org/forums/viewtopic.php?t=194469
+    # https://github.com/lurch/rpi-serial-console/blob/master/rpi-serial-console
+    # https://elinux.org/RPi_Serial_Connection
+    # ?
     if not ENABLE_SPEED_DETECTION:
         # By default we don't detect the speed or device as it's flakey in later
         # Pi kernels. But it might be necessary for some people so that functionality
         # can be enabled by setting the flag above to True
-        return ("ttyACM0", MAX_SPEED)
+        ret = [{'device': "ttyACM0", 'speed': MAX_SPEED, 'dreamcast_ip': None}]
+        if FORCE_TWO_MODEMS:
+            ret.append({'device': "ttyACM1", 'speed': MAX_SPEED, 'dreamcast_ip': None})
+        return ret
 
     command = ["wvdialconf", "/dev/null"]
+
+    # wvdialconf will allow us to potentially discover several modems, aggregate them in this array
+    devices_found = []
 
     try:
         output = subprocess.check_output(command, stderr=subprocess.STDOUT)
@@ -254,13 +286,23 @@ def detect_device_and_speed():
 
                 # Many modems report speeds higher than they can handle so we cap
                 # to 56k
-                return device, min(speed, MAX_SPEED)
+
+                devices_found.append({'device': device, 'speed': min(speed, MAX_SPEED), 'dreamcast_ip': None})
+        if len(devices_found) > 0:
+            return devices_found
         else:
             logger.info("No device detected")
 
     except:
         logger.exception("Unable to detect modem. Falling back to ttyACM0")
-    return ("ttyACM0", MAX_SPEED)
+    return [{'device': "ttyACM0", 'speed': MAX_SPEED, 'dreamcast_ip': None}]
+
+
+def find_pppd_pid(device_name):
+    pid = 0
+    with open("/var/run/ppp-{}.pid".format(device_name), 'r') as pidfile:
+        pid = int(pidfile.read())
+    return pid
 
 
 class Daemon(object):
@@ -420,14 +462,14 @@ class Modem(object):
         self.reset()  # Reset the modem
         self._sending_tone = False
 
-    def answer(self):
+    def answer(self, device_name):
         self.reset()
         # When we send ATA we only want to look for CONNECT. Some modems respond OK then CONNECT
         # and that messes everything up
         self.send_command("ATA", ignore_responses=["OK"])
         time.sleep(5)
         logger.info("Call answered!")
-        logger.info(subprocess.check_output(["pon", "dreamcast"]))
+        logger.info(subprocess.check_output(["pon", device_name]))
         logger.info("Connected")
 
     def send_command(self, command, timeout=60, ignore_responses=None):
@@ -498,101 +540,125 @@ def process():
 
     dial_tone_enabled = "--disable-dial-tone" not in sys.argv
 
+    # Initial cleanup: old processes and config files
+    with open(os.devnull, 'wb') as devnull:
+        subprocess.call(["sudo", "rm", "/etc/ppp/peers/dreamcast*", "/var/run/ppp-dreamcast*.pid"],
+                        stderr=devnull, shell=True)
     # Make sure pppd isn't running
     with open(os.devnull, 'wb') as devnull:
         subprocess.call(["sudo", "killall", "pppd"], stderr=devnull)
 
-    device_and_speed, internet_connected = None, False
+    devices, internet_connected = None, False
 
     # Startup checks, make sure that we don't do anything until
     # we have a modem and internet connection
     while True:
         logger.info("Detecting connection and modem...")
         internet_connected = check_internet_connection()
-        device_and_speed = detect_device_and_speed()
+        devices = detect_devices_and_speed()
 
-        if internet_connected and device_and_speed:
-            logger.info("Internet connected and device found!")
+        if internet_connected and devices:
+            logger.info("Internet connected and devices found!")
             break
 
         elif not internet_connected:
             logger.warn("Unable to detect an internet connection. Waiting...")
-        elif not device_and_speed:
+        elif not devices:
             logger.warn("Unable to find a modem device. Waiting...")
 
         time.sleep(5)
 
-    modem = Modem(device_and_speed[0], device_and_speed[1], dial_tone_enabled)
-    dreamcast_ip = autoconfigure_ppp(modem.device_name, modem.device_speed)
+    autoconfigure_ppp(devices)
 
-    # Get a port forwarding object, now that we know the DC IP.
-    # port_forwarding = PortForwarding(dreamcast_ip, logger)
+    count = 0
 
-    # Disabled until we can figure out a faster way of doing this.. it takes a minute
-    # on my router which is way too long to wait for the DreamPi to boot
-    # port_forwarding.forward_all()
+    for device in devices:
 
-    mode = "LISTENING"
-
-    modem.connect()
-    if dial_tone_enabled:
-        modem.start_dial_tone()
-
-    time_digit_heard = None
-
-    dcnow = DreamcastNowService()
-
-    while True:
-        if killer.kill_now:
-            break
-
-        now = datetime.now()
-
-        if mode == "LISTENING":
-            modem.update()
-            char = modem._serial.read(1).strip()
-            if not char:
+        count += 1
+        if count < len(devices):
+            # we're not on the last device, fork!
+            if os.fork() == 0:
+                # parent process
                 continue
 
-            if ord(char) == 16:
-                # DLE character
-                try:
-                    char = modem._serial.read(1)
-                    digit = int(char)
-                    logger.info("Heard: %s", digit)
+        modem = Modem(device['device'], device['speed'], dial_tone_enabled)
 
-                    mode = "ANSWERING"
-                    modem.stop_dial_tone()
-                    time_digit_heard = now
-                except (TypeError, ValueError):
-                    pass
-        elif mode == "ANSWERING":
-            if (now - time_digit_heard).total_seconds() > 8.0:
-                time_digit_heard = None
-                modem.answer()
-                modem.disconnect()
-                mode = "CONNECTED"
+        # Get a port forwarding object, now that we know the DC IP.
+        # port_forwarding = PortForwarding(dreamcast_ip, logger)
 
-        elif mode == "CONNECTED":
-            dcnow.go_online(dreamcast_ip)
+        # Disabled until we can figure out a faster way of doing this.. it takes a minute
+        # on my router which is way too long to wait for the DreamPi to boot
+        # port_forwarding.forward_all()
 
-            # We start watching /var/log/messages for the hang up message
-            for line in sh.tail("-f", "/var/log/messages", "-n", "1", _iter=True):
-                if "Modem hangup" in line:
-                    logger.info("Detected modem hang up, going back to listening")
-                    time.sleep(5)  # Give the hangup some time
-                    break
+        mode = "LISTENING"
 
-            dcnow.go_offline()
+        modem.connect()
+        if dial_tone_enabled:
+            modem.start_dial_tone()
 
-            mode = "LISTENING"
-            modem = Modem(device_and_speed[0], device_and_speed[1], dial_tone_enabled)
-            modem.connect()
-            if dial_tone_enabled:
-                modem.start_dial_tone()
+        time_digit_heard = None
 
-    # Temporarily disabled, see above
-    # port_forwarding.delete_all()
+        # TODO pass device identifier to let dcnow distinguish different dreamcasts ?
+        dcnow = DreamcastNowService()
+
+        while True:
+            if killer.kill_now:
+                break
+
+            now = datetime.now()
+
+            if mode == "LISTENING":
+                modem.update()
+                char = modem._serial.read(1).strip()
+                if not char:
+                    continue
+
+                if ord(char) == 16:
+                    # DLE character
+                    try:
+                        char = modem._serial.read(1)
+                        digit = int(char)
+                        logger.info("Heard: %s", digit)
+
+                        mode = "ANSWERING"
+                        modem.stop_dial_tone()
+                        time_digit_heard = now
+                    except (TypeError, ValueError):
+                        pass
+            elif mode == "ANSWERING":
+                if (now - time_digit_heard).total_seconds() > 8.0:
+                    time_digit_heard = None
+                    modem.answer(device['name'])
+                    modem.disconnect()
+                    pid = find_pppd_pid(device['name'])
+                    device['pid'] = pid
+                    mode = "CONNECTED"
+
+            elif mode == "CONNECTED":
+                # TODO pass device identifier to let dcnow distinguish different dreamcasts ?
+                dcnow.go_online(device['dreamcast_ip'])
+
+                # We start watching /var/log/messages for the hang up message
+                pidstring = "pppd[{}]".format(device['pid'])
+                for line in sh.tail("-f", "/var/log/messages", "-n", "1", _iter=True):
+                    # ignore lines that do not come from our pppd pid
+                    if pidstring not in line:
+                        continue
+                    if "Modem hangup" in line:
+                        logger.info("Detected modem hang up, going back to listening")
+                        time.sleep(5)  # Give the hangup some time
+                        break
+
+                dcnow.go_offline()
+
+                mode = "LISTENING"
+                modem = Modem(device['device'], device['speed'], dial_tone_enabled)
+                modem.connect()
+                if dial_tone_enabled:
+                    modem.start_dial_tone()
+
+        # Temporarily disabled, see above
+        # port_forwarding.delete_all()
     return 0
 
 
