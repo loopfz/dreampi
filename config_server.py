@@ -37,7 +37,6 @@ class DreamPiConfigurationService(BaseHTTPRequestHandler):
             "is_enabled": enabled_state
         }))
 
-
     def do_POST(self):
         enabled_state = True
 
@@ -64,12 +63,14 @@ class DreamPiConfigurationService(BaseHTTPRequestHandler):
 server = None
 thread = None
 
+
 def start():
     global server
     global thread
     server = HTTPServer(('0.0.0.0', 1998), DreamPiConfigurationService)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
+
 
 def stop():
     global server

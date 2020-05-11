@@ -18,7 +18,8 @@ import urllib2
 import iptc
 
 from dcnow import DreamcastNowService
-from port_forwarding import PortForwarding
+# unused for now
+# from port_forwarding import PortForwarding
 
 from datetime import datetime, timedelta
 
@@ -227,7 +228,8 @@ noccp
 
         logger.info("Dreamcast IP: {}".format(dreamcast_ip))
 
-        peers_content = PEERS_TEMPLATE.format(device=device['device'], device_speed=device['speed'], this_ip=this_ip, dc_ip=dreamcast_ip, device_name=device['name'])
+        peers_content = PEERS_TEMPLATE.format(device=device['device'], device_speed=device['speed'],
+                                              this_ip=this_ip, dc_ip=dreamcast_ip, device_name=device['name'])
 
         with open("/etc/ppp/peers/"+device['name'], "w") as f:
             f.write(peers_content)
@@ -239,7 +241,7 @@ noccp
 
 
 ENABLE_SPEED_DETECTION = False  # Set this to true if you want to use wvdialconf for device detection
-FORCE_TWO_MODEMS = False # experimental feature: force dreampi to consider two modem devices without running wvdialconf
+FORCE_TWO_MODEMS = False        # experimental: force dreampi to consider two modem devices without running wvdialconf
 
 
 # detect_devices_and_speed will run wvdialconf to detect any number of modem devices and their associated
