@@ -240,17 +240,17 @@ noccp
         f.write(options_content)
 
 
-ENABLE_SPEED_DETECTION = False  # Set this to true if you want to use wvdialconf for device detection
+ENABLE_MODEM_DETECTION = False  # Set this to true if you want to use wvdialconf for device detection
 FORCE_TWO_MODEMS = False        # experimental: force dreampi to consider two modem devices without running wvdialconf
 
 
 # detect_devices_and_speed will run wvdialconf to detect any number of modem devices and their associated
 # speed.
-# wvdialconf can be prolematic with recent Pi models, as such it is disabled by default, using a single
+# wvdialconf can be problematic with recent Pi models, as such it is disabled by default, using a single
 # default modem device (ttyACM0).
-# wvdialconf can be re-enabled by setting ENABLE_SPEED_DETECTION to True,
+# wvdialconf can be re-enabled by setting ENABLE_MODEM_DETECTION to True,
 # or if you still want to bypass the autodetection but try to use two modems, you can set
-# FORCE_DOUBLE_MODEM to True. (the second modem device will be ttyACM1 by default).
+# FORCE_TWO_MODEMS to True. (the second modem device will be ttyACM1 by default).
 def detect_devices_and_speed():
     MAX_SPEED = 57600
 
@@ -260,7 +260,7 @@ def detect_devices_and_speed():
     # https://github.com/lurch/rpi-serial-console/blob/master/rpi-serial-console
     # https://elinux.org/RPi_Serial_Connection
     # ?
-    if not ENABLE_SPEED_DETECTION:
+    if not ENABLE_MODEM_DETECTION:
         # By default we don't detect the speed or device as it's flakey in later
         # Pi kernels. But it might be necessary for some people so that functionality
         # can be enabled by setting the flag above to True
