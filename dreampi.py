@@ -544,8 +544,9 @@ def process():
 
     # Initial cleanup: old processes and config files
     with open(os.devnull, 'wb') as devnull:
-        subprocess.call(["sudo", "rm", "/etc/ppp/peers/dreamcast*", "/var/run/ppp-dreamcast*.pid"],
-                        stderr=devnull, shell=True)
+        # use sh -c to delay eval instead of shell=True; globbing would be expanded with the current user otherwise
+        subprocess.call(["sudo", "sh", "-c", "rm /etc/ppp/peers/dreamcast* /var/run/ppp-dreamcast*.pid"],
+                        stderr=devnull)
     # Make sure pppd isn't running
     with open(os.devnull, 'wb') as devnull:
         subprocess.call(["sudo", "killall", "pppd"], stderr=devnull)
