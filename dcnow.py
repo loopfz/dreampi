@@ -39,7 +39,7 @@ class DreamcastNowThread(threading.Thread):
             if not self._service._enabled:
                 return
 
-            lines = [ x for x in sh.tail("/var/log/syslog", "-n", "10", _iter=True) ]
+            lines = [x for x in sh.tail("/var/log/syslog", "-n", "10", _iter=True)]
             dns_query = None
             for line in lines[::-1]:
                 if "CONNECT" in line and "dreampi" in line:
@@ -54,7 +54,7 @@ class DreamcastNowThread(threading.Thread):
                     break
 
             user_agent = 'Mozilla/4.0 (compatible; MSIE 5.5; Windows NT), Dreamcast Now'
-            header = { 'User-Agent' : user_agent }
+            header = {'User-Agent': user_agent}
             mac_address = self._service._mac_address
             data = {}
             if dns_query:
@@ -62,7 +62,7 @@ class DreamcastNowThread(threading.Thread):
 
             data = urllib.urlencode(data)
             req = urllib2.Request(API_ROOT + UPDATE_END_POINT.format(mac_address=mac_address), data, header)
-            urllib2.urlopen(req) # Send POST update
+            urllib2.urlopen(req)  # Send POST update
 
         while self._running:
             try:

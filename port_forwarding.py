@@ -1,5 +1,6 @@
 import miniupnpc
 
+
 class PortForwarding:
     """
         This class is used to forward the ports of all supported Dreamcast games
